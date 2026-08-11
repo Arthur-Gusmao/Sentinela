@@ -14,7 +14,7 @@ typedef struct {
 int readCpu(System *system);
 int readRam(System *system);
 void readDisk(void);
-void readHostname(void);
+int readHostname(System *system);
 
 int main(void) {
 
@@ -24,9 +24,14 @@ int main(void) {
   while (isRunning) {
     readCpu(&system);
     readRam(&system);
-
-    printf("CPU : %d%%\n", system.percCpu);
-    printf("RAM : %d%%\n", system.percRam);
+    readHostname(&system);
+    printf("============================\n");
+    printf("Monitor Agent\n");
+    printf("============================\n");
+    printf("CPU      : %d%%\n", system.percCpu);
+    printf("RAM      : %d%%\n", system.percRam);
+    printf("HOSTNAME : %s", system.hostname);
+    printf("============================\n");
   }
 
   return EXIT_SUCCESS;
@@ -123,3 +128,23 @@ int readRam(System *system) {
   return EXIT_SUCCESS;
 }
 
+int readHostname(System *system) {
+  FILE *hostnameFile = fopen("/etc/hostname", "r");
+
+  char *buffer = malloc(256);
+
+  if (buffer == NULL) {
+    fclose(hostnameFile);
+    return EXIT_FAILURE;
+  }
+  if (fgets(system->hostname, sizeof(buffer), hostnameFile) == NULL) {
+    free(system->hostname);
+    fclose(hostnameFile);
+    return EXIT_FAILURE;
+  }
+
+  system->hostname = buffer;
+  fclose(hostnameFile);
+
+  return EXIT_SUCCESS;
+}
