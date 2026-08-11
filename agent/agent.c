@@ -2,35 +2,44 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 
+#define STRING_SIZE 256
 typedef struct {
   int percCpu;
   int percRam;
   int percDisk;
-  char *hostname;
+  char hostname[STRING_SIZE];
+  char Os[STRING_SIZE];
 } System;
 
 int readCpu(System *system);
 int readRam(System *system);
-void readDisk(void);
+int readDisk(System *system);
 int readHostname(System *system);
+int readOS(System *system);
 
 int main(void) {
 
   bool isRunning = true;
   System system;
 
+  readHostname(&system);
+  readOS(&system);
+
   while (isRunning) {
     readCpu(&system);
     readRam(&system);
-    readHostname(&system);
+    readDisk(&system);
     printf("============================\n");
     printf("Monitor Agent\n");
     printf("============================\n");
     printf("CPU      : %d%%\n", system.percCpu);
     printf("RAM      : %d%%\n", system.percRam);
+    printf("DISK     : %d%%\n", system.percDisk);
     printf("HOSTNAME : %s", system.hostname);
+    printf("OS       : %s\n", system.Os);
     printf("============================\n");
   }
 
@@ -128,23 +137,52 @@ int readRam(System *system) {
   return EXIT_SUCCESS;
 }
 
+int readDisk(System *system) {
+  struct statvfs disk;
+
+  if (statvfs("/", &disk) != 0) {
+    return EXIT_FAILURE;
+  }
+
+  unsigned long total = disk.f_blocks * disk.f_frsize;
+  unsigned long available = disk.f_bavail * disk.f_frsize;
+  unsigned long used = total - available;
+
+  system->percDisk = (double)used / total * 100;
+
+  return EXIT_SUCCESS;
+}
+
 int readHostname(System *system) {
   FILE *hostnameFile = fopen("/etc/hostname", "r");
 
-  char *buffer = malloc(256);
-
-  if (buffer == NULL) {
-    fclose(hostnameFile);
+  if (hostnameFile == NULL) {
     return EXIT_FAILURE;
   }
-  if (fgets(system->hostname, sizeof(buffer), hostnameFile) == NULL) {
-    free(system->hostname);
+
+  if (fgets(system->hostname, sizeof(system->hostname), hostnameFile) == NULL) {
     fclose(hostnameFile);
     return EXIT_FAILURE;
   }
 
-  system->hostname = buffer;
   fclose(hostnameFile);
 
+  return EXIT_SUCCESS;
+}
+
+int readOS(System *system) {
+  FILE *osFile = fopen("/etc/os-release", "r");
+  char buffer[STRING_SIZE] = {0};
+
+  if (osFile == NULL) {
+    return EXIT_FAILURE;
+  }
+
+  while (fgets(buffer, sizeof(buffer), osFile) != NULL) {
+    if (sscanf(buffer, "PRETTY_NAME=\"%255[^\"]\"", system->Os) == 1) {
+      fclose(osFile);
+      return EXIT_SUCCESS;
+    }
+  }
   return EXIT_SUCCESS;
 }

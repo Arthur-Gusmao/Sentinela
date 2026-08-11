@@ -1,6 +1,6 @@
 CC=cc
 CFLAGS= -Wall -Wextra -std=c99 -pedantic
-IN=src/agent.c
+IN=agent/agent.c
 OUT=Sentinela
 
 all: $(IN)
