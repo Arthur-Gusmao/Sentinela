@@ -1,6 +1,8 @@
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 typedef struct {
   int percCpu;
@@ -9,44 +11,115 @@ typedef struct {
   char *hostname;
 } System;
 
-void readCpu(void);
-void readRam(void);
+int readCpu(System *system);
+int readRam(System *system);
 void readDisk(void);
 void readHostname(void);
 
 int main(void) {
 
-  readCpu();
+  bool isRunning = true;
+  System system;
+
+  while (isRunning) {
+    readCpu(&system);
+    readRam(&system);
+
+    printf("CPU : %d%%\n", system.percCpu);
+    printf("RAM : %d%%\n", system.percRam);
+  }
 
   return EXIT_SUCCESS;
 }
 
-void readCpu(void) {
+int readCpu(System *system) {
   char buffer[256] = {0};
 
-  long user;
-  long nice;
-  long system;
-  long idle;
+  long user = 0;
+  long nice = 0;
+  long system_time = 0;
+  long idle = 0;
+
+  long user2 = 0;
+  long nice2 = 0;
+  long system_time2 = 0;
+  long idle2 = 0;
+
+  long deltaUser = 0;
+  long deltaNice = 0;
+  long deltaSystem = 0;
+  long deltaIdle = 0;
+
+  long busy = 0;
+  long total = 0;
 
   FILE *statFile = fopen("/proc/stat", "r");
 
   if (statFile == NULL) {
-    return;
+    return EXIT_FAILURE;
   }
 
   fgets(buffer, sizeof(buffer), statFile);
 
-  if (sscanf(buffer, "cpu %ld %ld %ld %ld", &user, &nice, &system, &idle) !=
-      4) {
+  if (sscanf(buffer, "cpu %ld %ld %ld %ld", &user, &nice, &system_time,
+             &idle) != 4) {
     fclose(statFile);
-    return;
+    return EXIT_FAILURE;
   }
 
-  printf("user    : %ld\n", user);
-  printf("nice    : %ld\n", nice);
-  printf("system  : %ld\n", system);
-  printf("idle    : %ld\n", idle);
+  rewind(statFile);
+  sleep(1);
 
+  fgets(buffer, sizeof(buffer), statFile);
+
+  if (sscanf(buffer, "cpu %ld %ld %ld %ld", &user2, &nice2, &system_time2,
+             &idle2) != 4) {
+    fclose(statFile);
+    return EXIT_FAILURE;
+  }
+
+  deltaUser = user2 - user;
+  deltaNice = nice2 - nice;
+  deltaSystem = system_time2 - system_time;
+  deltaIdle = idle2 - idle;
+
+  busy = deltaUser + deltaNice + deltaSystem;
+  total = busy + deltaIdle;
+
+  system->percCpu = (double)busy / total * 100;
   fclose(statFile);
+  return EXIT_SUCCESS;
 }
+
+int readRam(System *system) {
+  char buffer[3][256] = {0};
+
+  long totalMem = 0;
+  long freeMem = 0;
+  long availableMem = 0;
+
+  FILE *memFile = fopen("/proc/meminfo", "r");
+
+  if (memFile == NULL) {
+    return EXIT_FAILURE;
+  }
+
+  for (int i = 0; i < 3; i++) {
+    if (fgets(buffer[i], sizeof(buffer), memFile) == NULL) {
+      fclose(memFile);
+      return EXIT_FAILURE;
+    }
+  }
+
+  sscanf(buffer[0], "MemTotal: %ld kB", &totalMem);
+  sscanf(buffer[1], "MemFree: %ld kB", &freeMem);
+  sscanf(buffer[2], "MemAvailable: %ld kB", &availableMem);
+
+  long usedMem = totalMem - availableMem;
+
+  system->percRam = (double)usedMem / totalMem * 100;
+  fclose(memFile);
+
+  return EXIT_SUCCESS;
+}
+
