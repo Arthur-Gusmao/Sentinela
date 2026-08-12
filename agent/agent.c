@@ -1,15 +1,19 @@
+#include <json-c/json.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
+#include <string.h>
 
 #define STRING_SIZE 256
+
 typedef struct {
   int percCpu;
   int percRam;
   int percDisk;
+  double uptime;
   char hostname[STRING_SIZE];
   char Os[STRING_SIZE];
 } System;
@@ -19,6 +23,8 @@ int readRam(System *system);
 int readDisk(System *system);
 int readHostname(System *system);
 int readOS(System *system);
+int readUpTime(System *system);
+void printJson(System *system);
 
 int main(void) {
 
@@ -26,21 +32,15 @@ int main(void) {
   System system;
 
   readHostname(&system);
+  
   readOS(&system);
 
   while (isRunning) {
     readCpu(&system);
     readRam(&system);
     readDisk(&system);
-    printf("============================\n");
-    printf("Monitor Agent\n");
-    printf("============================\n");
-    printf("CPU      : %d%%\n", system.percCpu);
-    printf("RAM      : %d%%\n", system.percRam);
-    printf("DISK     : %d%%\n", system.percDisk);
-    printf("HOSTNAME : %s", system.hostname);
-    printf("OS       : %s\n", system.Os);
-    printf("============================\n");
+    readUpTime(&system);
+    printJson(&system);
   }
 
   return EXIT_SUCCESS;
@@ -164,6 +164,7 @@ int readHostname(System *system) {
     fclose(hostnameFile);
     return EXIT_FAILURE;
   }
+  system->hostname[strcspn(system->hostname, "\n")] = '\0';
 
   fclose(hostnameFile);
 
@@ -184,5 +185,64 @@ int readOS(System *system) {
       return EXIT_SUCCESS;
     }
   }
+
+  fclose(osFile);
+
   return EXIT_SUCCESS;
+}
+
+int readUpTime(System *system) {
+  FILE *uptimeFile = fopen("/proc/uptime", "r");
+
+  if (uptimeFile == NULL) {
+    return EXIT_FAILURE;
+  }
+
+  if (fscanf(uptimeFile, "%lf", &system->uptime) != 1) {
+    fclose(uptimeFile);
+    return EXIT_FAILURE;
+  }
+
+  fclose(uptimeFile);
+
+  return EXIT_SUCCESS;
+}
+
+void printJson(System *system) {
+  struct json_object *object = json_object_new_object();
+
+  json_object_object_add(
+      object,
+      "cpu",
+      json_object_new_int(system->percCpu));
+
+  json_object_object_add(
+      object,
+      "ram",
+      json_object_new_int(system->percRam));
+
+  json_object_object_add(
+      object,
+      "disk",
+      json_object_new_int(system->percDisk));
+
+  json_object_object_add(
+      object,
+      "uptime",
+      json_object_new_double(system->uptime));
+
+  json_object_object_add(
+      object,
+      "hostname",
+      json_object_new_string(system->hostname));
+
+  json_object_object_add(
+      object,
+      "os",
+      json_object_new_string(system->Os));
+
+  printf("%s\n", json_object_to_json_string(object));
+
+  json_object_put(object);
+
 }
