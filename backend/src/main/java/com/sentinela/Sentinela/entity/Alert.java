@@ -18,7 +18,6 @@ public class Alert {
     @JoinColumn(name = "server_id", nullable = false)
     private Server server;
 
-    private String server;
     private String type;
 
     @Enumerated(EnumType.STRING)
