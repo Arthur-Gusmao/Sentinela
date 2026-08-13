@@ -9,5 +9,5 @@ import java.util.List;
 
 public interface AlertRepository extends JpaRepository<Alert, Long> {
     List<Metric> findByServerIdAndResolvedFalse(Long serverId);
-    List<Metric> FindByResolvedFalse();
+    List<Metric> findByResolvedFalse();
 }

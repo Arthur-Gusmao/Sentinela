@@ -24,7 +24,7 @@ public class Alert {
     private AlertSeverity severity;
 
     private String message;
-    private Boolean resolved = false;
+    private boolean resolved = false;
 
     private LocalDateTime createdAt;
     private LocalDateTime resolvedAt;
