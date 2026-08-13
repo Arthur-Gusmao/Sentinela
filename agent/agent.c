@@ -1,11 +1,12 @@
+#include <fcntl.h>
 #include <json-c/json.h>
-#include <stdatomic.h>
-#include <stdbool.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
-#include <string.h>
 
 #define STRING_SIZE 256
 
@@ -25,21 +26,43 @@ int readHostname(System *system);
 int readOS(System *system);
 int readUpTime(System *system);
 void printJson(System *system);
+int daemonize(void);
+
+static volatile sig_atomic_t isRunning = 1;
+
+static void handleSignal(int signal) {
+  (void)signal;
+  isRunning = 0;
+}
 
 int main(void) {
+  System system = {0};
 
-  bool isRunning = true;
-  System system;
+  if (readHostname(&system) != EXIT_SUCCESS)
+    return EXIT_FAILURE;
 
-  readHostname(&system);
-  
-  readOS(&system);
+  if (readOS(&system) != EXIT_SUCCESS)
+    return EXIT_FAILURE;
+
+  if (daemonize() != EXIT_SUCCESS)
+    return EXIT_FAILURE;
+
+  signal(SIGTERM, handleSignal);
+  signal(SIGINT, handleSignal);
 
   while (isRunning) {
-    readCpu(&system);
-    readRam(&system);
-    readDisk(&system);
-    readUpTime(&system);
+    if (readCpu(&system) != EXIT_SUCCESS)
+      return EXIT_FAILURE;
+
+    if (readRam(&system) != EXIT_SUCCESS)
+      return EXIT_FAILURE;
+
+    if (readDisk(&system) != EXIT_SUCCESS)
+      return EXIT_FAILURE;
+
+    if (readUpTime(&system) != EXIT_SUCCESS)
+      return EXIT_FAILURE;
+
     printJson(&system);
   }
 
@@ -211,38 +234,78 @@ int readUpTime(System *system) {
 void printJson(System *system) {
   struct json_object *object = json_object_new_object();
 
-  json_object_object_add(
-      object,
-      "cpu",
-      json_object_new_int(system->percCpu));
+  json_object_object_add(object, "cpu", json_object_new_int(system->percCpu));
 
-  json_object_object_add(
-      object,
-      "ram",
-      json_object_new_int(system->percRam));
+  json_object_object_add(object, "ram", json_object_new_int(system->percRam));
 
-  json_object_object_add(
-      object,
-      "disk",
-      json_object_new_int(system->percDisk));
+  json_object_object_add(object, "disk", json_object_new_int(system->percDisk));
 
-  json_object_object_add(
-      object,
-      "uptime",
-      json_object_new_double(system->uptime));
+  json_object_object_add(object, "uptime",
+                         json_object_new_double(system->uptime));
 
-  json_object_object_add(
-      object,
-      "hostname",
-      json_object_new_string(system->hostname));
+  json_object_object_add(object, "hostname",
+                         json_object_new_string(system->hostname));
 
-  json_object_object_add(
-      object,
-      "os",
-      json_object_new_string(system->Os));
+  json_object_object_add(object, "os", json_object_new_string(system->Os));
 
   printf("%s\n", json_object_to_json_string(object));
 
   json_object_put(object);
+}
 
+int daemonize(void) {
+  pid_t pid;
+
+  pid = fork();
+
+  if (pid < 0) {
+    perror("fork");
+    return EXIT_FAILURE;
+  }
+
+  if (pid > 0) {
+    exit(EXIT_SUCCESS);
+  }
+
+  if (setsid() < 0) {
+    perror("setsid");
+    return EXIT_FAILURE;
+  }
+
+  pid = fork();
+
+  if (pid < 0) {
+    perror("fork");
+    return EXIT_FAILURE;
+  }
+
+  if (pid > 0) {
+    exit(EXIT_SUCCESS);
+  }
+
+  if (chdir("/") != 0) {
+    perror("chdir");
+    return EXIT_FAILURE;
+  }
+
+  umask(0);
+
+  int fd = open("/dev/null", O_RDWR);
+
+  if (fd < 0) {
+    perror("open");
+    return EXIT_FAILURE;
+  }
+
+  if (dup2(fd, STDIN_FILENO) < 0 || dup2(fd, STDOUT_FILENO) < 0 ||
+      dup2(fd, STDERR_FILENO) < 0) {
+    perror("dup2");
+    close(fd);
+    return EXIT_FAILURE;
+  }
+
+  if (fd > STDERR_FILENO)
+    close(fd);
+
+  return EXIT_SUCCESS;
 }
