@@ -22,6 +22,6 @@ public class MetricsRequest {
     private Double disk;
 
     private Double temperature;
-    private Double networkRx;
-    private Double networkTx;
+    private Long networkRx;
+    private Long networkTx;
 }
