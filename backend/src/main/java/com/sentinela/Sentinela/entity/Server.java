@@ -20,7 +20,7 @@ public class Server {
     private String ip;
 
     private String operatingSystem;
-    
+
     @Enumerated(EnumType.STRING)
     private ServerStatus status = ServerStatus.ONLINE;
 
