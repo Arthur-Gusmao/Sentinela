@@ -19,8 +19,8 @@ public class Server {
 
     private String ip;
 
-    private String operationSystem;
-
+    private String operatingSystem;
+    
     @Enumerated(EnumType.STRING)
     private ServerStatus status = ServerStatus.ONLINE;
 
