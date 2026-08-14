@@ -1,22 +1,30 @@
+#include <arpa/inet.h>
 #include <fcntl.h>
-#include <json-c/json.h>
+#include <netinet/in.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
 
 #define STRING_SIZE 256
+#define AGENT_HOST "127.0.0.1"
+#define AGENT_PORT 8080
 
 typedef struct {
-  int percCpu;
-  int percRam;
-  int percDisk;
+  double percCpu;
+  double percRam;
+  double percDisk;
   double uptime;
   char hostname[STRING_SIZE];
   char Os[STRING_SIZE];
+  char ip[STRING_SIZE];
+  double temperature;
+  long networkRx;
+  long networkTx;
 } System;
 
 int readCpu(System *system);
@@ -25,7 +33,9 @@ int readDisk(System *system);
 int readHostname(System *system);
 int readOS(System *system);
 int readUpTime(System *system);
-void printJson(System *system);
+int readTemperature(System *system);
+int readNetwork(System *system);
+int sendMetrics(System *system);
 int daemonize(void);
 
 static volatile sig_atomic_t isRunning = 1;
@@ -63,7 +73,12 @@ int main(void) {
     if (readUpTime(&system) != EXIT_SUCCESS)
       return EXIT_FAILURE;
 
-    printJson(&system);
+    readTemperature(&system);
+    readNetwork(&system);
+
+    sendMetrics(&system);
+
+    sleep(5);
   }
 
   return EXIT_SUCCESS;
@@ -123,7 +138,7 @@ int readCpu(System *system) {
   busy = deltaUser + deltaNice + deltaSystem;
   total = busy + deltaIdle;
 
-  system->percCpu = (double)busy / total * 100;
+  system->percCpu = total > 0 ? (double)busy / total * 100 : 0;
   fclose(statFile);
   return EXIT_SUCCESS;
 }
@@ -132,7 +147,6 @@ int readRam(System *system) {
   char buffer[3][256] = {0};
 
   long totalMem = 0;
-  long freeMem = 0;
   long availableMem = 0;
 
   FILE *memFile = fopen("/proc/meminfo", "r");
@@ -149,12 +163,11 @@ int readRam(System *system) {
   }
 
   sscanf(buffer[0], "MemTotal: %ld kB", &totalMem);
-  sscanf(buffer[1], "MemFree: %ld kB", &freeMem);
   sscanf(buffer[2], "MemAvailable: %ld kB", &availableMem);
 
   long usedMem = totalMem - availableMem;
 
-  system->percRam = (double)usedMem / totalMem * 100;
+  system->percRam = totalMem > 0 ? (double)usedMem / totalMem * 100 : 0;
   fclose(memFile);
 
   return EXIT_SUCCESS;
@@ -171,7 +184,7 @@ int readDisk(System *system) {
   unsigned long available = disk.f_bavail * disk.f_frsize;
   unsigned long used = total - available;
 
-  system->percDisk = (double)used / total * 100;
+  system->percDisk = total > 0 ? (double)used / total * 100 : 0;
 
   return EXIT_SUCCESS;
 }
@@ -231,26 +244,138 @@ int readUpTime(System *system) {
   return EXIT_SUCCESS;
 }
 
-void printJson(System *system) {
-  struct json_object *object = json_object_new_object();
+int readTemperature(System *system) {
+  FILE *file = fopen("/sys/class/thermal/thermal_zone0/temp", "r");
 
-  json_object_object_add(object, "cpu", json_object_new_int(system->percCpu));
+  if (file == NULL) {
+    system->temperature = 0;
+    return EXIT_FAILURE;
+  }
 
-  json_object_object_add(object, "ram", json_object_new_int(system->percRam));
+  int temp = 0;
 
-  json_object_object_add(object, "disk", json_object_new_int(system->percDisk));
+  if (fscanf(file, "%d", &temp) != 1) {
+    fclose(file);
+    system->temperature = 0;
+    return EXIT_FAILURE;
+  }
 
-  json_object_object_add(object, "uptime",
-                         json_object_new_double(system->uptime));
+  system->temperature = temp / 1000.0;
+  fclose(file);
 
-  json_object_object_add(object, "hostname",
-                         json_object_new_string(system->hostname));
+  return EXIT_SUCCESS;
+}
 
-  json_object_object_add(object, "os", json_object_new_string(system->Os));
+int readNetwork(System *system) {
+  FILE *file = fopen("/proc/net/dev", "r");
+  char buffer[256] = {0};
+  char iface[32] = {0};
+  long rx = 0;
+  long tx = 0;
 
-  printf("%s\n", json_object_to_json_string(object));
+  system->networkRx = 0;
+  system->networkTx = 0;
 
-  json_object_put(object);
+  if (file == NULL) {
+    return EXIT_FAILURE;
+  }
+
+  for (int i = 0; i < 2; i++) {
+    if (fgets(buffer, sizeof(buffer), file) == NULL) {
+      fclose(file);
+      return EXIT_FAILURE;
+    }
+  }
+
+  while (fgets(buffer, sizeof(buffer), file) != NULL) {
+    if (sscanf(buffer, " %31[^:]: %ld %*d %*d %*d %*d %*d %*d %*d %ld",
+               iface, &rx, &tx) == 3) {
+      if (strcmp(iface, "lo") != 0) {
+        system->networkRx = rx;
+        system->networkTx = tx;
+        fclose(file);
+        return EXIT_SUCCESS;
+      }
+    }
+  }
+
+  fclose(file);
+
+  return EXIT_FAILURE;
+}
+
+int sendMetrics(System *system) {
+  char json[1024];
+  char request[2048];
+
+  int sock = socket(AF_INET, SOCK_STREAM, 0);
+
+  if (sock < 0) {
+    return EXIT_FAILURE;
+  }
+
+  struct sockaddr_in server;
+
+  server.sin_family = AF_INET;
+  server.sin_port = htons(AGENT_PORT);
+
+  if (inet_pton(AF_INET, AGENT_HOST, &server.sin_addr) != 1) {
+    close(sock);
+    return EXIT_FAILURE;
+  }
+
+  if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0) {
+    close(sock);
+    return EXIT_FAILURE;
+  }
+
+  struct sockaddr_in local;
+  socklen_t localLen = sizeof(local);
+
+  if (getsockname(sock, (struct sockaddr *)&local, &localLen) == 0) {
+    if (inet_ntop(AF_INET, &local.sin_addr, system->ip,
+                  sizeof(system->ip)) == NULL) {
+      snprintf(system->ip, sizeof(system->ip), "unknown");
+    }
+  } else {
+    snprintf(system->ip, sizeof(system->ip), "unknown");
+  }
+
+  snprintf(json, sizeof(json),
+           "{"
+           "\"hostname\":\"%s\","
+           "\"ip\":\"%s\","
+           "\"os\":\"%s\","
+           "\"cpu\":%.1f,"
+           "\"ram\":%.1f,"
+           "\"disk\":%.1f,"
+           "\"temperature\":%.1f,"
+           "\"networkRx\":%ld,"
+           "\"networkTx\":%ld,"
+           "\"uptime\":%.1f"
+           "}",
+           system->hostname, system->ip, system->Os, system->percCpu,
+           system->percRam, system->percDisk, system->temperature,
+           system->networkRx, system->networkTx, system->uptime);
+
+  snprintf(request, sizeof(request),
+           "POST /api/v1/agents/metrics HTTP/1.1\r\n"
+           "Host: %s:%d\r\n"
+           "Content-Type: application/json\r\n"
+           "Content-Length: %zu\r\n"
+           "Connection: close\r\n"
+           "\r\n"
+           "%s",
+           AGENT_HOST, AGENT_PORT, strlen(json), json);
+
+  ssize_t n = send(sock, request, strlen(request), 0);
+  close(sock);
+
+  if (n < 0) {
+    return EXIT_FAILURE;
+  }
+
+  return EXIT_SUCCESS;
 }
 
 int daemonize(void) {
