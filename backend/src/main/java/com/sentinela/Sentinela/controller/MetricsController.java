@@ -1,6 +1,6 @@
 package com.sentinela.Sentinela.controller;
 
-import com.sentinela.Sentinela.MonitoringService;
+import com.sentinela.Sentinela.service.MonitoringService;
 import com.sentinela.Sentinela.dto.MetricsRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;

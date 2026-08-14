@@ -1,4 +1,4 @@
-package com.sentinela.Sentinela;
+package com.sentinela.Sentinela.service;
 
 import com.sentinela.Sentinela.dto.MetricsRequest;
 import com.sentinela.Sentinela.entity.*;

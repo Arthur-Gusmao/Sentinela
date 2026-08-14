@@ -8,6 +8,6 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 public interface AlertRepository extends JpaRepository<Alert, Long> {
-    List<Metric> findByServerIdAndResolvedFalse(Long serverId);
-    List<Metric> findByResolvedFalse();
+    List<Alert> findByServerIdAndResolvedFalse(Long serverId);
+    List<Alert> findByResolvedFalse();
 }
