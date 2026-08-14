@@ -3,30 +3,25 @@ CFLAGS= -Wall -Wextra -std=c99 -pedantic -static
 IN=agent/agent.c
 OUT=Sentinela
 
-MVN=./mvnw
 BACKEND_DIR=backend
 
-.PHONY: all agent backend agent-run backend-run test clean
+.PHONY: all agent agent-run docker-up docker-down clean
 
-all: agent backend
+all: agent
 
 agent: $(OUT)
 
 $(OUT): $(IN)
 	$(CC) $(CFLAGS) -o $(OUT) $(IN)
 
-backend:
-	cd $(BACKEND_DIR) && $(MVN) clean package
-
 agent-run: $(OUT)
 	./$(OUT)
 
-backend-run:
-	cd $(BACKEND_DIR) && $(MVN) spring-boot:run
+docker-up:
+	docker compose -f $(BACKEND_DIR)/docker-compose.yml up --build -d
 
-test:
-	cd $(BACKEND_DIR) && $(MVN) test
+docker-down:
+	docker compose -f $(BACKEND_DIR)/docker-compose.yml down
 
 clean:
 	rm -f $(OUT)
-	cd $(BACKEND_DIR) && $(MVN) clean

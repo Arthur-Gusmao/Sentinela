@@ -16,10 +16,10 @@ based on configurable thresholds.
 |  (per machine) |                                        |  backend         |
 |  reads /proc   |                                        |  REST + JPA      |
 +----------------+                                        +------------------+
-                                                            |              |
-                                                            v              v
-                                                       PostgreSQL     Redis
-                                                        (metrics)   (cache/queue)
+                                                            |             |
+                                                            v             v
+                                                       PostgreSQL      Redis
+                                                      (persistence)  (configured)
 ```
 
 - **Agent** (`agent/`): a C99 daemon that samples metrics every 5 seconds and
@@ -31,11 +31,13 @@ based on configurable thresholds.
 
 ```
 .
-├── Makefile                     # Build helpers for agent and backend
+├── Makefile                     # Agent build + Docker stack helpers
 ├── Sentinela                    # Compiled agent binary
 ├── agent/
 │   └── agent.c                  # Agent source (C99, Linux /proc)
 └── backend/
+    ├── Dockerfile               # Backend image (multi-stage Maven + JRE)
+    ├── docker-compose.yml       # Backend + PostgreSQL + Redis stack
     ├── pom.xml                  # Spring Boot 4 project (Java 21)
     ├── mvnw                     # Maven wrapper
     └── src/main/
@@ -51,16 +53,15 @@ based on configurable thresholds.
 - Linux (reads `/proc`, `/sys`, `/etc/hostname`, `/etc/os-release`)
 - A C99 compiler (`gcc` or `clang`)
 - `make`
-- [json-c](https://github.com/json-c/json-c) development package
 
 On Debian/Ubuntu:
 
 ```sh
-sudo apt install gcc make libjson-c-dev
+sudo apt install gcc make
 ```
 
-> Note: the agent only needs json-c at build time; the built binary is statically
-> linked.
+> The agent only uses the standard C library; the built binary is statically
+> linked and has no runtime dependencies.
 
 ### Backend
 
@@ -75,9 +76,55 @@ On Debian/Ubuntu:
 sudo apt install openjdk-21-jdk postgresql redis-server
 ```
 
-## Setup — database
+Alternatively, install [Docker](https://docs.docker.com/engine/install/) and use
+the provided `docker-compose.yml` to run the backend, PostgreSQL and Redis
+without installing them on the host.
 
-Create the `sentinela` database (PostgreSQL must be running):
+## Building
+
+The `Makefile` drives the agent build and the Docker stack; the backend is
+built directly with Maven.
+
+### Agent
+
+```sh
+make agent
+```
+
+This compiles `agent/agent.c` into the `Sentinela` binary.
+
+### Backend
+
+```sh
+cd backend
+./mvnw clean package
+```
+
+The JAR is produced at `backend/target/Sentinela-0.0.1-SNAPSHOT.jar`.
+
+## Running
+
+### Option A — Docker (recommended)
+
+Requires Docker and Docker Compose. This builds the backend image and starts
+the backend together with PostgreSQL and Redis:
+
+```sh
+make docker-up
+```
+
+The service listens on `http://localhost:8080`. Bring everything down with:
+
+```sh
+make docker-down
+```
+
+> `docker compose` also maps PostgreSQL (`5432`) and Redis (`6379`) to the host,
+> so the agent and any host-run process can reach the backend normally.
+
+### Option B — Run on the host
+
+#### 1. Start the database services
 
 ```sh
 sudo systemctl start postgresql redis-server
@@ -101,60 +148,14 @@ Connection settings (URL, username, password) live in
 
 The backend creates/updates the tables automatically (`ddl-auto: update`).
 
-## Building
-
-The project-wide `Makefile` can drive both components from the repository root.
-
-### Agent
-
-```sh
-make agent
-```
-
-This compiles `agent/agent.c` into the `Sentinela` binary.
-
-### Backend
-
-```sh
-make backend
-```
-
-or, from the `backend/` directory:
-
-```sh
-./mvnw clean package
-```
-
-The JAR is produced at `backend/target/sentinela-0.0.1-SNAPSHOT.jar`.
-
-### Everything at once
-
-```sh
-make
-```
-
-Builds both the agent and the backend.
-
-## Running
-
-### 1. Start the backend
-
-First make sure PostgreSQL and Redis are up, then:
-
-```sh
-make backend-run
-```
-
-or manually:
+#### 2. Start the backend
 
 ```sh
 cd backend
 ./mvnw spring-boot:run
 ```
 
-The service listens on `http://localhost:8080`.
-
-### 2. Run the agent
+#### 3. Run the agent
 
 The agent posts metrics to the backend (default target `127.0.0.1:8080`).
 Run it as root or a user with read access to `/proc`:
@@ -178,7 +179,7 @@ sudo pkill Sentinela
 > The agent target host/port are compile-time constants (`AGENT_HOST` and
 > `AGENT_PORT` in `agent/agent.c`). Rebuild the agent after changing them.
 
-### 3. Verify
+#### 4. Verify
 
 ```sh
 curl http://localhost:8080/api/v1/servers
@@ -244,13 +245,21 @@ The backend raises alerts when a metric crosses a threshold:
 
 | Target | Description |
 | --- | --- |
-| `make` / `make all` | Build agent and backend |
+| `make` / `make all` | Compile the agent binary |
 | `make agent` | Compile the agent binary |
-| `make backend` | Build the backend JAR |
 | `make agent-run` | Run the agent |
-| `make backend-run` | Start the Spring Boot backend |
-| `make test` | Run backend tests |
-| `make clean` | Remove the agent binary and clean backend artifacts |
+| `make docker-up` | Build backend image and start the Docker stack |
+| `make docker-down` | Stop and remove the Docker stack |
+| `make clean` | Remove the agent binary |
+
+Backend build/run/test tasks use Maven directly:
+
+```sh
+cd backend
+./mvnw test            # run tests
+./mvnw clean package   # build the JAR
+./mvnw spring-boot:run # start the backend
+```
 
 ## License
 
