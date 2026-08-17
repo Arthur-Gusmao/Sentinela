@@ -35,17 +35,17 @@ public class ServerStatusService {
                 server.setStatus(ServerStatus.OFFLINE);
                 serverRepository.save(server);
 
-                createOfflineAlert(server)
+                createOfflineAlert(server);
             }
         }
     }
 
-    public void createOfflineAlert(Server server) {
+    private void createOfflineAlert(Server server) {
         Alert alert = new Alert();
         alert.setServer(server);
         alert.setType("OFFLINE");
         alert.setSeverity(AlertSeverity.CRITICAL);
         alert.setMessage("Server " + server.getHostname() + " is offline");
-        alertRepository.save(alert)
+        alertRepository.save(alert);
     }   
 }
