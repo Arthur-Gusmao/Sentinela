@@ -1,5 +1,7 @@
 package com.sentinela.Sentinela.service;
 
+import com.sentinela.Sentinela.entity.Alert;
+import com.sentinela.Sentinela.entity.AlertSeverity;
 import com.sentinela.Sentinela.entity.Server;
 import com.sentinela.Sentinela.entity.ServerStatus;
 import com.sentinela.Sentinela.repository.AlertRepository;
@@ -28,8 +30,22 @@ public class ServerStatusService {
 
         for (Server server: offlineServers) {
             if (server.getStatus() != ServerStatus.OFFLINE) {
+                log.warn("Server offline detected: {}", server.getHostname());
 
+                server.setStatus(ServerStatus.OFFLINE);
+                serverRepository.save(server);
+
+                createOfflineAlert(server)
             }
         }
     }
+
+    public void createOfflineAlert(Server server) {
+        Alert alert = new Alert();
+        alert.setServer(server);
+        alert.setType("OFFLINE");
+        alert.setSeverity(AlertSeverity.CRITICAL);
+        alert.setMessage("Server " + server.getHostname() + " is offline");
+        alertRepository.save(alert)
+    }   
 }
