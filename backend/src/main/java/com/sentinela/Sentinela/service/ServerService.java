@@ -3,6 +3,7 @@ package com.sentinela.Sentinela.service;
 import com.sentinela.Sentinela.dto.AlertResponse;
 import com.sentinela.Sentinela.dto.MetricResponse;
 import com.sentinela.Sentinela.dto.ServerResponse;
+import com.sentinela.Sentinela.entity.Alert;
 import com.sentinela.Sentinela.mapper.SentinelaMapper;
 import com.sentinela.Sentinela.entity.Server;
 import com.sentinela.Sentinela.repository.AlertRepository;
@@ -11,6 +12,7 @@ import com.sentinela.Sentinela.repository.ServerRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
@@ -54,5 +56,16 @@ public class ServerService {
                 .stream()
                 .map(mapper::toAlertResponse)
                 .toList();
+    }
+
+    public AlertResponse resolveAlert(Long id) {
+        Alert alert = alertRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Alert not found: " + id));
+
+        alert.setResolved(true);
+        alert.setResolvedAt(LocalDateTime.now());
+        alertRepository.save(alert);
+
+        return mapper.toAlertResponse(alert);
     }
 }

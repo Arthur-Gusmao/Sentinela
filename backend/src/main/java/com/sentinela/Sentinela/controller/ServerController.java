@@ -41,4 +41,9 @@ public class ServerController {
     public ResponseEntity<List<AlertResponse>> findAllAlerts() {
         return ResponseEntity.ok(serverService.findAllActiveAlerts());
     }
+
+    @PatchMapping("/alerts/{id}/resolve")
+    public ResponseEntity<AlertResponse> resolveAlert(@PathVariable Long id) {
+        return ResponseEntity.ok(serverService.resolveAlert(id));
+    }
 }
