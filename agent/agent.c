@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200112L
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -54,8 +55,8 @@ int main(void) {
   if (readOS(&system) != EXIT_SUCCESS)
     return EXIT_FAILURE;
 
-  if (daemonize() != EXIT_SUCCESS)
-    return EXIT_FAILURE;
+  //if (daemonize() != EXIT_SUCCESS)
+    //return EXIT_FAILURE;
 
   signal(SIGTERM, handleSignal);
   signal(SIGINT, handleSignal);
@@ -190,20 +191,9 @@ int readDisk(System *system) {
 }
 
 int readHostname(System *system) {
-  FILE *hostnameFile = fopen("/etc/hostname", "r");
-
-  if (hostnameFile == NULL) {
+  if (gethostname(system->hostname, sizeof(system->hostname)) != 0) {
     return EXIT_FAILURE;
   }
-
-  if (fgets(system->hostname, sizeof(system->hostname), hostnameFile) == NULL) {
-    fclose(hostnameFile);
-    return EXIT_FAILURE;
-  }
-  system->hostname[strcspn(system->hostname, "\n")] = '\0';
-
-  fclose(hostnameFile);
-
   return EXIT_SUCCESS;
 }
 

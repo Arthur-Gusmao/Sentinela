@@ -1,5 +1,5 @@
 CC=cc
-CFLAGS= -Wall -Wextra -std=c99 -pedantic -static
+CFLAGS= -Wall -Wextra -std=c99 -pedantic 
 IN=agent/agent.c
 OUT=Sentinela
 

@@ -1,14 +1,12 @@
 package com.sentinela.Sentinela.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
 @Data
 public class MetricsRequest {
 
-    @NotBlank
     private String hostname;
     private String ip;
 
