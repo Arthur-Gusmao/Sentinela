@@ -1,49 +1,53 @@
 # Sentinela
 
-A lightweight system monitoring solution. A small C agent collects host
-metrics (CPU, RAM, disk, uptime, temperature, network) on each machine and
-sends them to a Spring Boot backend, which stores the data and raises alerts
-based on configurable thresholds.
+A lightweight server monitoring system. A C agent runs on each machine you want to monitor, collecting metrics from the Linux kernel and sending them to a Spring Boot backend every 5 seconds. The backend stores the data, raises alerts when thresholds are crossed, and pushes updates to a React dashboard over WebSocket in real time.
 
-> **Status: Work in progress — not production ready.** APIs and behavior may
-> change at any time.
+> **Status:** Work in progress — not production ready. APIs and behavior may change at any time.
 
 ## Architecture
 
 ```
-+----------------+   HTTP (POST /api/v1/agents/metrics)   +------------------+
-|  C agent       | -------------------------------------> |  Spring Boot     |
-|  (per machine) |                                        |  backend         |
-|  reads /proc   |                                        |  REST + JPA      |
-+----------------+                                        +------------------+
-                                                            |             |
-                                                            v             v
-                                                       PostgreSQL      Redis
-                                                      (persistence)  (configured)
++------------------+   HTTP POST /api/v1/agents/metrics   +------------------+
+|   C Agent        | ------------------------------------> |   Spring Boot    |
+|   (per machine)  |                                       |   Backend        |
+|   reads /proc    |                                       |   REST + JPA     |
++------------------+                                       +------------------+
+                                                             |             |
+                                                             v             v
+                                                        PostgreSQL      Redis
+                                                                           |
+                                                                           v
+                                                             +------------------+
+                                                             |   React          |
+                                                             |   Dashboard      |
+                                                             |   WebSocket      |
+                                                             +------------------+
 ```
 
-- **Agent** (`agent/`): a C99 daemon that samples metrics every 5 seconds and
-  posts them as JSON to the backend.
-- **Backend** (`backend/`): a Spring Boot 4 application exposing a REST API,
-  persisting servers, metrics and alerts.
+- **Agent** (`agent/`): a C99 daemon that samples CPU, RAM, disk, network, temperature and uptime every 5 seconds and POSTs them as JSON to the backend. Runs on any Linux machine with `/proc`.
+- **Backend** (`backend/`): a Spring Boot 4 application exposing a REST API, persisting data with JPA/PostgreSQL, and broadcasting real-time updates over WebSocket (STOMP over SockJS).
+- **Frontend** (`frontend/`): a React + Vite dashboard that connects via WebSocket for live metric updates, displays server status, metric history charts, and active alerts.
 
 ## Project structure
 
 ```
 .
-├── Makefile                     # Agent build + Docker stack helpers
-├── Sentinela                    # Compiled agent binary
+├── Makefile                      # Agent build + Docker stack helpers
 ├── agent/
-│   └── agent.c                  # Agent source (C99, Linux /proc)
-└── backend/
-    ├── Dockerfile               # Backend image (multi-stage Maven + JRE)
-    ├── docker-compose.yml       # Backend + PostgreSQL + Redis stack
-    ├── pom.xml                  # Spring Boot 4 project (Java 21)
-    ├── mvnw                     # Maven wrapper
-    └── src/main/
-        ├── java/...             # Controllers, services, entities, repositories
-        └── resources/
-            └── application.yml  # DB, Redis and server configuration
+│   └── agent.c                   # Agent source (C99, Linux /proc)
+├── backend/
+│   ├── Dockerfile                # Multi-stage Maven + JRE image
+│   ├── docker-compose.yml        # Backend + PostgreSQL + Redis stack
+│   ├── pom.xml                   # Spring Boot 4, Java 21
+│   └── src/main/
+│       ├── java/...              # Controllers, services, entities, repositories
+│       └── resources/
+│           └── application.yml   # DB, Redis and server configuration
+└── frontend/
+    ├── src/
+    │   └── App.jsx               # React dashboard with WebSocket client
+    ├── vite.config.js
+    └── package.json
 ```
 
 ## Prerequisites
@@ -51,142 +55,141 @@ based on configurable thresholds.
 ### Agent
 
 - Linux (reads `/proc`, `/sys`, `/etc/hostname`, `/etc/os-release`)
-- A C99 compiler (`gcc` or `clang`)
+- GCC or Clang (C99)
 - `make`
+- `libjson-c`
 
 On Debian/Ubuntu:
-
-```sh
-sudo apt install gcc make
+```bash
+sudo apt install gcc make libjson-c-dev
 ```
 
-> The agent only uses the standard C library; the built binary is statically
-> linked and has no runtime dependencies.
+On Fedora/RHEL:
+```bash
+sudo dnf install gcc make json-c-devel
+```
 
 ### Backend
 
-- Java 21 (JDK)
-- Maven (optional — the bundled `./mvnw` wrapper downloads Maven automatically)
-- PostgreSQL (default: `localhost:5432`)
-- Redis (default: `localhost:6379`)
+- Java 21
+- Docker (recommended)
 
-On Debian/Ubuntu:
+### Frontend
 
-```sh
-sudo apt install openjdk-21-jdk postgresql redis-server
-```
-
-Alternatively, install [Docker](https://docs.docker.com/engine/install/) and use
-the provided `docker-compose.yml` to run the backend, PostgreSQL and Redis
-without installing them on the host.
+- Node.js 18+
+- npm
 
 ## Building
 
-The `Makefile` drives the agent build and the Docker stack; the backend is
-built directly with Maven.
-
 ### Agent
 
-```sh
+```bash
 make agent
 ```
 
-This compiles `agent/agent.c` into the `Sentinela` binary.
+Compiles `agent/agent.c` into the `Sentinela` binary.
 
 ### Backend
 
-```sh
+```bash
 cd backend
 ./mvnw clean package
 ```
 
-The JAR is produced at `backend/target/Sentinela-0.0.1-SNAPSHOT.jar`.
+Produces `backend/target/Sentinela-0.0.1-SNAPSHOT.jar`.
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+npm run build
+```
 
 ## Running
 
 ### Option A — Docker (recommended)
 
-Requires Docker and Docker Compose. This builds the backend image and starts
-the backend together with PostgreSQL and Redis:
+Starts the backend, PostgreSQL, and Redis together:
 
-```sh
+```bash
 make docker-up
 ```
 
-The service listens on `http://localhost:8080`. Bring everything down with:
+The API listens on `http://localhost:8080`. To stop:
 
-```sh
+```bash
 make docker-down
 ```
 
-> `docker compose` also maps PostgreSQL (`5432`) and Redis (`6379`) to the host,
-> so the agent and any host-run process can reach the backend normally.
+Default ports exposed to the host:
+
+| Service    | Host port |
+|------------|-----------|
+| Backend    | 8080      |
+| PostgreSQL | 5434      |
+| Redis      | 6379      |
 
 ### Option B — Run on the host
 
-#### 1. Start the database services
+**1. Start the database services**
 
-```sh
+```bash
 sudo systemctl start postgresql redis-server
-sudo -u postgres createdb sentinela
+sudo -u postgres psql -c "CREATE DATABASE sentinela;"
 ```
 
-Or, using the `psql` shell:
+Connection settings live in `backend/src/main/resources/application.yml`:
 
-```sql
-CREATE DATABASE sentinela;
-```
+| Setting    | Default                                          |
+|------------|--------------------------------------------------|
+| PostgreSQL | `jdbc:postgresql://localhost:5432/sentinela`     |
+| Redis      | `localhost:6379`                                 |
+| HTTP port  | `8080`                                           |
 
-Connection settings (URL, username, password) live in
-`backend/src/main/resources/application.yml`. Defaults:
+**2. Start the backend**
 
-| Setting | Default |
-| --- | --- |
-| PostgreSQL | `jdbc:postgresql://localhost:5432/sentinela` (user/pass `postgres`) |
-| Redis | `localhost:6379` |
-| HTTP port | `8080` |
-
-The backend creates/updates the tables automatically (`ddl-auto: update`).
-
-#### 2. Start the backend
-
-```sh
+```bash
 cd backend
 ./mvnw spring-boot:run
 ```
 
-#### 3. Run the agent
+**3. Run the frontend**
 
-The agent posts metrics to the backend (default target `127.0.0.1:8080`).
-Run it as root or a user with read access to `/proc`:
+```bash
+cd frontend
+npm run dev
+```
 
-```sh
+Dashboard available at `http://localhost:5173`.
+
+**4. Run the agent**
+
+The agent posts metrics to `127.0.0.1:8080` by default. The host and port are compile-time constants (`AGENT_HOST` and `AGENT_PORT` in `agent/agent.c`) — rebuild the agent after changing them.
+
+```bash
 sudo make agent-run
 ```
 
 or:
 
-```sh
+```bash
 sudo ./Sentinela
 ```
 
-The agent daemonizes and reports metrics every 5 seconds. Stop it with:
+The agent daemonizes automatically. To stop it:
 
-```sh
+```bash
 sudo pkill Sentinela
 ```
 
-> The agent target host/port are compile-time constants (`AGENT_HOST` and
-> `AGENT_PORT` in `agent/agent.c`). Rebuild the agent after changing them.
+**5. Verify**
 
-#### 4. Verify
-
-```sh
+```bash
 curl http://localhost:8080/api/v1/servers
 ```
 
-After a few seconds you should see the host listed, along with metrics at
-`/api/v1/servers/{id}/metrics`.
+After a few seconds the host should appear, with metrics available at `/api/v1/servers/{id}/metrics`.
 
 ## API
 
@@ -211,56 +214,46 @@ Receives a metric report from an agent.
 ```
 
 ### `GET /servers`
-
 Lists all registered servers.
 
 ### `GET /servers/{id}`
-
 Returns a single server.
 
 ### `GET /servers/{id}/metrics`
-
 Lists the latest metrics for a server (newest first).
 
 ### `GET /servers/{id}/alerts`
-
-Lists the unresolved alerts for a server.
+Lists unresolved alerts for a server.
 
 ### `GET /alerts`
-
 Lists all unresolved alerts across every server.
+
+### `PATCH /alerts/{id}/resolve`
+Marks an alert as resolved.
 
 ## Alerts
 
-The backend raises alerts when a metric crosses a threshold:
+The backend raises alerts automatically when a metric crosses a threshold:
 
-| Metric | Threshold | Severity |
-| --- | --- | --- |
-| CPU | > 90% | CRITICAL |
-| RAM | > 85% | WARNING |
-| Disk | > 90% | CRITICAL |
-| Temperature | > 80 °C | CRITICAL |
+| Metric      | Threshold | Severity |
+|-------------|-----------|----------|
+| CPU         | > 90%     | CRITICAL |
+| RAM         | > 85%     | WARNING  |
+| Disk        | > 90%     | CRITICAL |
+| Temperature | > 80°C    | CRITICAL |
+| Server down | no heartbeat for 60s | CRITICAL |
 
 ## Make targets
 
-| Target | Description |
-| --- | --- |
-| `make` / `make all` | Compile the agent binary |
-| `make agent` | Compile the agent binary |
-| `make agent-run` | Run the agent |
-| `make docker-up` | Build backend image and start the Docker stack |
-| `make docker-down` | Stop and remove the Docker stack |
-| `make clean` | Remove the agent binary |
-
-Backend build/run/test tasks use Maven directly:
-
-```sh
-cd backend
-./mvnw test            # run tests
-./mvnw clean package   # build the JAR
-./mvnw spring-boot:run # start the backend
-```
+| Target           | Description                              |
+|------------------|------------------------------------------|
+| `make` / `make all` | Compile the agent binary              |
+| `make agent`     | Compile the agent binary                 |
+| `make agent-run` | Run the agent                            |
+| `make docker-up` | Build backend image and start the stack  |
+| `make docker-down` | Stop and remove the stack              |
+| `make clean`     | Remove the agent binary                  |
 
 ## License
 
-[MIT](LICENSE)
+MIT
