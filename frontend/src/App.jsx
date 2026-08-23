@@ -1,6 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Client } from "@stomp/stompjs";
+import SockJS from "sockjs-client";
 
 const API = "http://localhost:8080/api/v1";
+const WS_URL = "http://localhost:8080/ws";
 
 const palette = {
   bg: "#0A0A0F",
@@ -13,34 +16,30 @@ const palette = {
   white: "#E8E8F0",
 };
 
-function useFetch(url, interval = 5000) {
+function useFetch(url, interval = null) {
   const [data, setData] = useState(null);
-  const [error, setError] = useState(null);
 
   const fetch_ = useCallback(() => {
     fetch(url)
       .then((r) => r.json())
       .then(setData)
-      .catch(setError);
+      .catch(() => {});
   }, [url]);
 
   useEffect(() => {
     fetch_();
-    const id = setInterval(fetch_, interval);
-    return () => clearInterval(id);
+    if (interval) {
+      const id = setInterval(fetch_, interval);
+      return () => clearInterval(id);
+    }
   }, [fetch_, interval]);
 
-  return { data, error };
+  return [data, setData];
 }
 
 function StatusLED({ status }) {
   const color =
-    status === "ONLINE"
-      ? palette.green
-      : status === "ALERT"
-      ? palette.orange
-      : palette.red;
-
+    status === "ONLINE" ? palette.green : status === "ALERT" ? palette.orange : palette.red;
   return (
     <span
       style={{
@@ -50,19 +49,17 @@ function StatusLED({ status }) {
         borderRadius: "50%",
         background: color,
         boxShadow: `0 0 6px ${color}`,
-        animation: status === "ONLINE" ? "none" : "blink 1.2s ease-in-out infinite",
         flexShrink: 0,
+        animation: status !== "ONLINE" ? "blink 1.2s ease-in-out infinite" : "none",
       }}
     />
   );
 }
 
-function MetricBar({ label, value, unit = "%" }) {
+function MetricBar({ label, value }) {
   const capped = Math.min(value ?? 0, 100);
-  const color =
-    capped >= 90 ? palette.red : capped >= 75 ? palette.orange : palette.green;
+  const color = capped >= 90 ? palette.red : capped >= 75 ? palette.orange : palette.green;
   const pulse = capped >= 80;
-
   return (
     <div style={{ marginBottom: 10 }}>
       <div
@@ -78,17 +75,10 @@ function MetricBar({ label, value, unit = "%" }) {
       >
         <span>{label}</span>
         <span style={{ color: capped >= 80 ? color : palette.white, fontWeight: 600 }}>
-          {value != null ? `${value.toFixed(1)}${unit}` : "—"}
+          {value != null ? `${value.toFixed(1)}%` : "—"}
         </span>
       </div>
-      <div
-        style={{
-          height: 3,
-          background: palette.border,
-          borderRadius: 2,
-          overflow: "hidden",
-        }}
-      >
+      <div style={{ height: 3, background: palette.border, borderRadius: 2, overflow: "hidden" }}>
         <div
           style={{
             height: "100%",
@@ -105,13 +95,7 @@ function MetricBar({ label, value, unit = "%" }) {
   );
 }
 
-function ServerCard({ server, onClick, isSelected }) {
-  const { data: metrics } = useFetch(`${API}/servers/${server.id}/metrics`, 6000);
-  const { data: alerts } = useFetch(`${API}/servers/${server.id}/alerts`, 6000);
-
-  const latest = metrics?.[0];
-  const activeAlerts = alerts?.filter((a) => !a.resolved) ?? [];
-
+function ServerCard({ server, latestMetric, alertCount, onClick, isSelected }) {
   const lastSeenMs = server.lastSeen ? Date.now() - new Date(server.lastSeen).getTime() : null;
   const lastSeenLabel =
     lastSeenMs == null
@@ -135,11 +119,8 @@ function ServerCard({ server, onClick, isSelected }) {
         cursor: "pointer",
         transition: "border-color 0.2s, box-shadow 0.2s",
         boxShadow: isSelected ? `0 0 0 1px ${palette.green}30` : "none",
-        position: "relative",
-        overflow: "hidden",
       }}
     >
-      {/* Top row */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
         <StatusLED status={server.status} />
         <span
@@ -148,7 +129,6 @@ function ServerCard({ server, onClick, isSelected }) {
             fontSize: 13,
             fontWeight: 700,
             color: palette.white,
-            letterSpacing: "0.02em",
             flex: 1,
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -157,7 +137,7 @@ function ServerCard({ server, onClick, isSelected }) {
         >
           {server.hostname}
         </span>
-        {activeAlerts.length > 0 && (
+        {alertCount > 0 && (
           <span
             style={{
               background: palette.red + "20",
@@ -170,17 +150,13 @@ function ServerCard({ server, onClick, isSelected }) {
               border: `1px solid ${palette.red}40`,
             }}
           >
-            {activeAlerts.length} ALERT{activeAlerts.length > 1 ? "S" : ""}
+            {alertCount} ALERT{alertCount > 1 ? "S" : ""}
           </span>
         )}
       </div>
-
-      {/* Metrics */}
-      <MetricBar label="CPU" value={latest?.cpuUsage} />
-      <MetricBar label="RAM" value={latest?.ramUsage} />
-      <MetricBar label="DISK" value={latest?.diskUsage} />
-
-      {/* Footer */}
+      <MetricBar label="CPU" value={latestMetric?.cpuUsage} />
+      <MetricBar label="RAM" value={latestMetric?.ramUsage} />
+      <MetricBar label="DISK" value={latestMetric?.diskUsage} />
       <div
         style={{
           display: "flex",
@@ -199,8 +175,7 @@ function ServerCard({ server, onClick, isSelected }) {
 }
 
 function AlertRow({ alert, onResolve }) {
-  const severityColor = alert.severity === "CRITICAL" ? palette.red : palette.orange;
-
+  const color = alert.severity === "CRITICAL" ? palette.red : palette.orange;
   return (
     <div
       style={{
@@ -213,20 +188,10 @@ function AlertRow({ alert, onResolve }) {
         fontSize: 12,
       }}
     >
-      <span
-        style={{
-          color: severityColor,
-          fontWeight: 700,
-          fontSize: 10,
-          minWidth: 60,
-          letterSpacing: "0.06em",
-        }}
-      >
+      <span style={{ color, fontWeight: 700, fontSize: 10, minWidth: 60, letterSpacing: "0.06em" }}>
         {alert.severity}
       </span>
-      <span style={{ color: palette.muted, minWidth: 80, fontSize: 11 }}>
-        {alert.hostname}
-      </span>
+      <span style={{ color: palette.muted, minWidth: 80, fontSize: 11 }}>{alert.hostname}</span>
       <span style={{ color: palette.white, flex: 1, fontSize: 11 }}>{alert.message}</span>
       <button
         onClick={() => onResolve(alert.id)}
@@ -257,150 +222,267 @@ function AlertRow({ alert, onResolve }) {
   );
 }
 
-function MetricHistory({ serverId }) {
-  const { data: metrics } = useFetch(`${API}/servers/${serverId}/metrics`, 6000);
+function MiniChart({ values, color }) {
+  if (!values || values.length < 2) return null;
+  const w = 220;
+  const h = 40;
+  const max = Math.max(...values, 1);
+  const points = values
+    .map((v, i) => `${(i / (values.length - 1)) * w},${h - (v / max) * h}`)
+    .join(" ");
+  const last = values[values.length - 1];
+  const cx = w;
+  const cy = h - (last / max) * h;
+  return (
+    <svg width={w} height={h} style={{ overflow: "visible", display: "block" }}>
+      <polyline
+        points={points}
+        fill="none"
+        stroke={color}
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        opacity={0.8}
+      />
+      <circle cx={cx} cy={cy} r={3} fill={color} />
+    </svg>
+  );
+}
 
-  if (!metrics || metrics.length === 0) return null;
-
-  const recent = metrics.slice(0, 20).reverse();
-
-  const MiniChart = ({ field, label, color }) => {
-    const vals = recent.map((m) => m[field] ?? 0);
-    const max = Math.max(...vals, 1);
-    const w = 200;
-    const h = 40;
-
-    const points = vals
-      .map((v, i) => {
-        const x = (i / (vals.length - 1)) * w;
-        const y = h - (v / max) * h;
-        return `${x},${y}`;
-      })
-      .join(" ");
-
-    return (
-      <div style={{ marginBottom: 16 }}>
-        <div
-          style={{
-            fontFamily: "'JetBrains Mono', monospace",
-            fontSize: 10,
-            color: palette.muted,
-            marginBottom: 4,
-            letterSpacing: "0.06em",
-          }}
-        >
-          {label}
-        </div>
-        <svg width={w} height={h} style={{ overflow: "visible" }}>
-          <polyline
-            points={points}
-            fill="none"
-            stroke={color}
-            strokeWidth={1.5}
-            strokeLinejoin="round"
-            strokeLinecap="round"
-            opacity={0.8}
-          />
-          {vals.length > 0 && (
-            <circle
-              cx={(vals.length - 1) / (vals.length - 1) * w}
-              cy={h - (vals[vals.length - 1] / max) * h}
-              r={3}
-              fill={color}
-            />
-          )}
-        </svg>
-        <div
-          style={{
-            fontFamily: "'JetBrains Mono', monospace",
-            fontSize: 11,
-            color,
-            marginTop: 2,
-          }}
-        >
-          {vals[vals.length - 1]?.toFixed(1)}%
-        </div>
-      </div>
-    );
-  };
+function ServerDetail({ server, metrics, onClose }) {
+  const recent = (metrics ?? []).slice(0, 30).reverse();
+  const cpuVals = recent.map((m) => m.cpuUsage ?? 0);
+  const ramVals = recent.map((m) => m.ramUsage ?? 0);
+  const diskVals = recent.map((m) => m.diskUsage ?? 0);
+  const latest = metrics?.[0];
 
   return (
-    <div style={{ marginTop: 20 }}>
-      <div
-        style={{
-          fontFamily: "'JetBrains Mono', monospace",
-          fontSize: 10,
-          color: palette.muted,
-          letterSpacing: "0.1em",
-          marginBottom: 14,
-        }}
-      >
-        LAST {recent.length} READINGS
-      </div>
-      <MiniChart field="cpuUsage" label="CPU" color={palette.green} />
-      <MiniChart field="ramUsage" label="RAM" color="#7C83FF" />
-      <MiniChart field="diskUsage" label="DISK" color={palette.orange} />
-      {metrics[0]?.temperature > 0 && (
-        <div
+    <aside
+      style={{
+        width: 280,
+        borderLeft: `1px solid ${palette.border}`,
+        padding: 20,
+        overflowY: "auto",
+        background: palette.card,
+        flexShrink: 0,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20 }}>
+        <StatusLED status={server.status} />
+        <span
           style={{
             fontFamily: "'JetBrains Mono', monospace",
-            fontSize: 11,
-            color: palette.muted,
-            marginTop: 8,
+            fontSize: 13,
+            fontWeight: 700,
+            color: palette.white,
           }}
         >
-          TEMP{" "}
-          <span style={{ color: palette.white }}>{metrics[0].temperature?.toFixed(1)}°C</span>
+          {server.hostname}
+        </span>
+        <button
+          onClick={onClose}
+          style={{
+            marginLeft: "auto",
+            background: "transparent",
+            border: "none",
+            color: palette.muted,
+            cursor: "pointer",
+            fontSize: 18,
+            lineHeight: 1,
+          }}
+        >
+          ×
+        </button>
+      </div>
+
+      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, marginBottom: 20 }}>
+        {[["IP", server.ip], ["OS", server.operatingSystem], ["STATUS", server.status]].map(
+          ([k, v]) => (
+            <div
+              key={k}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                marginBottom: 8,
+                paddingBottom: 8,
+                borderBottom: `1px solid ${palette.border}`,
+              }}
+            >
+              <span style={{ color: palette.muted }}>{k}</span>
+              <span
+                style={{
+                  color: palette.white,
+                  maxWidth: 160,
+                  textAlign: "right",
+                  wordBreak: "break-all",
+                }}
+              >
+                {v ?? "—"}
+              </span>
+            </div>
+          )
+        )}
+      </div>
+
+      {recent.length > 1 && (
+        <div>
+          <div
+            style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 10,
+              color: palette.muted,
+              letterSpacing: "0.1em",
+              marginBottom: 16,
+            }}
+          >
+            LAST {recent.length} READINGS
+          </div>
+
+          {[
+            { label: "CPU", vals: cpuVals, color: palette.green },
+            { label: "RAM", vals: ramVals, color: "#7C83FF" },
+            { label: "DISK", vals: diskVals, color: palette.orange },
+          ].map(({ label, vals, color }) => (
+            <div key={label} style={{ marginBottom: 18 }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 10,
+                  color: palette.muted,
+                  marginBottom: 6,
+                }}
+              >
+                <span>{label}</span>
+                <span style={{ color }}>{vals[vals.length - 1]?.toFixed(1)}%</span>
+              </div>
+              <MiniChart values={vals} color={color} />
+            </div>
+          ))}
+
+          {latest?.temperature > 0 && (
+            <div
+              style={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 11,
+                color: palette.muted,
+                marginTop: 4,
+              }}
+            >
+              TEMP{" "}
+              <span style={{ color: palette.white }}>{latest.temperature?.toFixed(1)}°C</span>
+            </div>
+          )}
         </div>
       )}
-    </div>
+    </aside>
   );
 }
 
 export default function App() {
-  const { data: servers } = useFetch(`${API}/servers`, 6000);
-  const { data: allAlerts } = useFetch(`${API}/alerts`, 6000);
+  const [servers, setServers] = useFetch(`${API}/servers`);
+  const [alerts, setAlerts] = useFetch(`${API}/alerts`);
+  const [metricsMap, setMetricsMap] = useState({});
+  const [alertsMap, setAlertsMap] = useState({});
   const [selected, setSelected] = useState(null);
   const [now, setNow] = useState(Date.now());
+  const [wsConnected, setWsConnected] = useState(false);
+  const clientRef = useRef(null);
 
+  // Clock
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
 
+  // Load initial metrics and alerts per server
+  useEffect(() => {
+    if (!servers) return;
+    servers.forEach((s) => {
+      fetch(`${API}/servers/${s.id}/metrics`)
+        .then((r) => r.json())
+        .then((metrics) => setMetricsMap((prev) => ({ ...prev, [s.id]: metrics })))
+        .catch(() => {});
+      fetch(`${API}/servers/${s.id}/alerts`)
+        .then((r) => r.json())
+        .then((serverAlerts) =>
+          setAlertsMap((prev) => ({
+            ...prev,
+            [s.id]: serverAlerts.filter((a) => !a.resolved),
+          }))
+        )
+        .catch(() => {});
+    });
+  }, [servers]);
+
+  // WebSocket
+  useEffect(() => {
+    const client = new Client({
+      webSocketFactory: () => new SockJS(WS_URL),
+      reconnectDelay: 3000,
+      onConnect: () => {
+        setWsConnected(true);
+
+        client.subscribe("/topic/metrics", (msg) => {
+          const metric = JSON.parse(msg.body);
+          setMetricsMap((prev) => ({
+            ...prev,
+            [metric.serverId]: [metric, ...(prev[metric.serverId] ?? [])].slice(0, 30),
+          }));
+        });
+
+        client.subscribe("/topic/servers", (msg) => {
+          const server = JSON.parse(msg.body);
+          setServers((prev) => {
+            if (!prev) return [server];
+            const exists = prev.find((s) => s.id === server.id);
+            return exists ? prev.map((s) => (s.id === server.id ? server : s)) : [...prev, server];
+          });
+        });
+
+        client.subscribe("/topic/alerts", (msg) => {
+          const alert = JSON.parse(msg.body);
+          setAlerts((prev) => (prev ? [alert, ...prev] : [alert]));
+          setAlertsMap((prev) => ({
+            ...prev,
+            [alert.serverId]: [alert, ...(prev[alert.serverId] ?? [])],
+          }));
+        });
+      },
+      onDisconnect: () => setWsConnected(false),
+    });
+
+    client.activate();
+    clientRef.current = client;
+    return () => client.deactivate();
+  }, []);
+
   const resolveAlert = async (id) => {
     await fetch(`${API}/alerts/${id}/resolve`, { method: "PATCH" });
+    setAlerts((prev) => prev?.filter((a) => a.id !== id));
+    setAlertsMap((prev) => {
+      const next = { ...prev };
+      Object.keys(next).forEach((k) => {
+        next[k] = next[k].filter((a) => a.id !== id);
+      });
+      return next;
+    });
   };
 
   const online = servers?.filter((s) => s.status === "ONLINE").length ?? 0;
   const offline = servers?.filter((s) => s.status === "OFFLINE").length ?? 0;
-  const alertCount = allAlerts?.length ?? 0;
+  const alertCount = alerts?.length ?? 0;
   const selectedServer = servers?.find((s) => s.id === selected);
 
   return (
     <>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap');
-
         * { box-sizing: border-box; margin: 0; padding: 0; }
-
-        body {
-          background: ${palette.bg};
-          color: ${palette.white};
-          font-family: 'Inter', sans-serif;
-          min-height: 100vh;
-        }
-
-        @keyframes blink {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.2; }
-        }
-
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.6; }
-        }
-
+        body { background: ${palette.bg}; color: ${palette.white}; font-family: 'Inter', sans-serif; min-height: 100vh; }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-track { background: ${palette.bg}; }
         ::-webkit-scrollbar-thumb { background: ${palette.border}; border-radius: 2px; }
@@ -427,8 +509,9 @@ export default function App() {
                 width: 8,
                 height: 8,
                 borderRadius: "50%",
-                background: palette.green,
-                boxShadow: `0 0 10px ${palette.green}`,
+                background: wsConnected ? palette.green : palette.muted,
+                boxShadow: wsConnected ? `0 0 10px ${palette.green}` : "none",
+                transition: "background 0.3s",
               }}
             />
             <span
@@ -456,7 +539,7 @@ export default function App() {
                     fontFamily: "'JetBrains Mono', monospace",
                     fontSize: 18,
                     fontWeight: 700,
-                    color: value > 0 && label !== "ONLINE" ? color : label === "ONLINE" && value > 0 ? color : palette.muted,
+                    color: value > 0 ? color : palette.muted,
                     lineHeight: 1,
                   }}
                 >
@@ -489,7 +572,6 @@ export default function App() {
         </header>
 
         <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-          {/* Main grid */}
           <main style={{ flex: 1, padding: 24, overflowY: "auto" }}>
             {!servers && (
               <div
@@ -544,6 +626,8 @@ export default function App() {
                     <ServerCard
                       key={s.id}
                       server={s}
+                      latestMetric={metricsMap[s.id]?.[0]}
+                      alertCount={alertsMap[s.id]?.length ?? 0}
                       onClick={() => setSelected(selected === s.id ? null : s.id)}
                       isSelected={selected === s.id}
                     />
@@ -552,8 +636,7 @@ export default function App() {
               </>
             )}
 
-            {/* Alerts section */}
-            {allAlerts && allAlerts.length > 0 && (
+            {alerts && alerts.length > 0 && (
               <div>
                 <div
                   style={{
@@ -574,7 +657,7 @@ export default function App() {
                     overflow: "hidden",
                   }}
                 >
-                  {allAlerts.map((a) => (
+                  {alerts.map((a) => (
                     <AlertRow key={a.id} alert={a} onResolve={resolveAlert} />
                   ))}
                 </div>
@@ -582,72 +665,12 @@ export default function App() {
             )}
           </main>
 
-          {/* Side panel — server detail */}
           {selectedServer && (
-            <aside
-              style={{
-                width: 280,
-                borderLeft: `1px solid ${palette.border}`,
-                padding: 20,
-                overflowY: "auto",
-                background: palette.card,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20 }}>
-                <StatusLED status={selectedServer.status} />
-                <span
-                  style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: 13,
-                    fontWeight: 700,
-                    color: palette.white,
-                  }}
-                >
-                  {selectedServer.hostname}
-                </span>
-                <button
-                  onClick={() => setSelected(null)}
-                  style={{
-                    marginLeft: "auto",
-                    background: "transparent",
-                    border: "none",
-                    color: palette.muted,
-                    cursor: "pointer",
-                    fontSize: 16,
-                    lineHeight: 1,
-                    padding: "0 2px",
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-
-              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10 }}>
-                {[
-                  ["IP", selectedServer.ip],
-                  ["OS", selectedServer.operatingSystem],
-                  ["STATUS", selectedServer.status],
-                ].map(([k, v]) => (
-                  <div
-                    key={k}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      marginBottom: 8,
-                      paddingBottom: 8,
-                      borderBottom: `1px solid ${palette.border}`,
-                    }}
-                  >
-                    <span style={{ color: palette.muted }}>{k}</span>
-                    <span style={{ color: palette.white, maxWidth: 160, textAlign: "right", wordBreak: "break-all" }}>
-                      {v ?? "—"}
-                    </span>
-                  </div>
-                ))}
-              </div>
-
-              <MetricHistory serverId={selectedServer.id} />
-            </aside>
+            <ServerDetail
+              server={selectedServer}
+              metrics={metricsMap[selectedServer.id]}
+              onClose={() => setSelected(null)}
+            />
           )}
         </div>
       </div>
