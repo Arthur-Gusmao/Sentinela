@@ -176,6 +176,33 @@ function ServerCard({ server, latestMetric, alertCount, onClick, isSelected }) {
 
 function AlertRow({ alert, onResolve }) {
   const color = alert.severity === "CRITICAL" ? palette.red : palette.orange;
+
+  const timeAgo = (dateStr) => {
+    if (!dateStr) return "—";
+
+    const formattedStr = typeof dateStr === "string" && !dateStr.includes("Z") && !dateStr.includes("+")
+      ? `${dateStr.replace(" ", "T")}Z`
+      : dateStr;
+
+    const diffMs = Math.abs(Date.now() - new Date(formattedStr).getTime());
+    const seconds = Math.floor(diffMs / 1000);
+
+    if (seconds < 60) return `${seconds}s ago`;
+
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+
+    const hours = Math.floor(minutes / 60);
+    const remMinutes = minutes % 60;
+    if (hours < 24) {
+      return remMinutes > 0 ? `${hours}h ${remMinutes}m ago` : `${hours}h ago`;
+    }
+
+    const days = Math.floor(hours / 24);
+    const remHours = hours % 24;
+    return remHours > 0 ? `${days}d ${remHours}h ago` : `${days}d ago`;
+  };
+
   return (
     <div
       style={{
@@ -193,6 +220,9 @@ function AlertRow({ alert, onResolve }) {
       </span>
       <span style={{ color: palette.muted, minWidth: 80, fontSize: 11 }}>{alert.hostname}</span>
       <span style={{ color: palette.white, flex: 1, fontSize: 11 }}>{alert.message}</span>
+      <span style={{ color: palette.muted, fontSize: 10, minWidth: 70, textAlign: "right" }}>
+        {timeAgo(alert.createdAt)}
+      </span>
       <button
         onClick={() => onResolve(alert.id)}
         style={{
